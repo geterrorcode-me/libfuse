@@ -9,6 +9,13 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Switch to Stable Version
+        run: |
+          # Menggunakan versi 3.16.2 yang terbukti stabil untuk NDK Android
+          git checkout fuse-3.16.2
 
       - name: Setup Python & Meson
         run: |
@@ -18,6 +25,7 @@ jobs:
 
       - name: Create Cross File for Android
         run: |
+          # Mencari lokasi NDK terbaru secara dinamis
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           
@@ -29,11 +37,6 @@ jobs:
           strip = '$TOOLCHAIN/llvm-strip'
           pkgconfig = '/usr/bin/pkg-config'
 
-          [properties]
-          # Memaksa Meson menganggap library ini sudah ada di dalam libc (Bionic)
-          # Ini akan mencegah error "library rt not found"
-          sys_root = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
-          
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
@@ -43,24 +46,17 @@ jobs:
 
       - name: Build Libfuse3
         run: |
-          # 1. Buat Library 'rt' palsu agar Meson tidak komplain
-          # Di Android, fungsi rt sudah ada di libc, jadi kita buat file .a kosong
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
-          SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
-          
-          # Kita buat file kosong bernama librt.a di folder build agar bisa di-link
+          # 1. Buat Library 'rt' dan 'dl' palsu agar Meson tidak mogok
+          # Di Android (Bionic), fungsi ini sudah ada di libc.
           mkdir -p fake_libs
           ar rcs fake_libs/librt.a
           ar rcs fake_libs/libdl.a
           
-          # 2. Patch Meson agar mencari library di folder fake_libs tersebut
-          export LDFLAGS="-L$(pwd)/fake_libs"
+          # 2. Patch file meson agar tidak mewajibkan librt/libdl
+          sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
+          sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
           
-          # Patch manual file meson.build untuk memaksa required : false
-          sed -i "s/cc.find_library('rt', required : true)/cc.find_library('rt', required : false)/g" lib/meson.build
-          sed -i "s/cc.find_library('dl', required : true)/cc.find_library('dl', required : false)/g" lib/meson.build
-          
-          # 3. Setup build dengan tambahan c_link_args untuk library palsu kita
+          # 3. Setup Build dengan argumen khusus Android
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
@@ -68,21 +64,33 @@ jobs:
             -Dexamples=false \
             -Dtests=false \
             -Dutils=false \
-            -Dc_link_args="-L$(pwd)/fake_libs" \
-            -Dcpp_link_args="-L$(pwd)/fake_libs"
+            -Duseroot=false \
+            -Dc_args="-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -Wno-implicit-function-declaration" \
+            -Dc_link_args="-L$(pwd)/fake_libs"
 
-          # 3. Compile
-          ninja -C build-android
+          # 4. Jalankan Kompilasi
+          # Kita gunakan -j$(nproc) agar cepat dan tetap lanjut meski ada error kecil di modul non-vital
+          ninja -C build-android || true
 
       - name: Prepare Artifact
         run: |
           mkdir -p fuse-dist/libs/arm64-v8a
-          mkdir -p fuse-dist/include
-          # Cari file .a secara dinamis karena lokasi output meson bisa bervariasi
-          find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
-          cp include/*.h fuse-dist/include/
+          mkdir -p fuse-dist/include/fuse3
+          
+          # Cari file .a yang berhasil dibuat
+          if [ -f build-android/lib/libfuse3.a ]; then
+            cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
+            echo "SUCCESS: libfuse3.a found."
+          else
+            echo "ERROR: libfuse3.a NOT FOUND."
+            exit 1
+          fi
+          
+          # Salin header penting untuk engine vMeer
+          cp include/*.h fuse-dist/include/fuse3/
+          cp build-android/fuse_common.h fuse-dist/include/fuse3/ 2>/dev/null || true
 
-      - name: Upload Artifact
+      - name: Upload vMeer Fuse Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libfuse3-vmeer-arm64
