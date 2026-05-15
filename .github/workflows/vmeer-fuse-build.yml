@@ -1,0 +1,68 @@
+name: vMeer Libfuse3 Android Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-fuse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Python & Meson
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip ninja-build
+          pip3 install meson
+
+      - name: Create Cross File for Android
+        run: |
+          # Mencari NDK secara dinamis
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          
+          # Membuat file konfigurasi cross-compile untuk Meson
+          cat > android_cross.txt <<EOF
+          [binaries]
+          c = '$TOOLCHAIN/aarch64-linux-android24-clang'
+          cpp = '$TOOLCHAIN/aarch64-linux-android24-clang++'
+          ar = '$TOOLCHAIN/llvm-ar'
+          strip = '$TOOLCHAIN/llvm-strip'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'arm64-v8a'
+          endian = 'little'
+          EOF
+
+      - name: Build Libfuse3
+        run: |
+          # Inisialisasi build folder dengan Meson
+          meson setup build-android \
+            --cross-file android_cross.txt \
+            --buildtype release \
+            -Ddefault_library=static \
+            -Dexamples=false \
+            -Dtests=false \
+            -Dutils=false
+
+          # Compile
+          ninja -C build-android
+
+      - name: Prepare Artifact
+        run: |
+          mkdir -p fuse-dist/libs/arm64-v8a
+          mkdir -p fuse-dist/include
+          # Ambil hasil build (biasanya ada di folder lib/)
+          cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
+          # Ambil header-header penting
+          cp include/*.h fuse-dist/include/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfuse3-vmeer-arm64
+          path: fuse-dist/
+          
