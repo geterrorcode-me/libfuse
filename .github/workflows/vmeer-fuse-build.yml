@@ -18,7 +18,6 @@ jobs:
 
       - name: Create Cross File for Android
         run: |
-          # Deteksi NDK secara otomatis
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           
@@ -38,17 +37,16 @@ jobs:
 
       - name: Build Libfuse3
         run: |
-          # 1. Buat Fake Libs agar Meson tidak komplain soal library rt/dl yang hilang
-          # Di Android, fungsi-fungsi ini sudah menyatu di libc.
+          # 1. Fake Libs untuk bypass rt/dl
           mkdir -p fake_libs
           ar rcs fake_libs/librt.a
           ar rcs fake_libs/libdl.a
           
-          # 2. Patch Meson agar menganggap dependensi sistem opsional
+          # 2. Patch Meson: Hapus paksa pengecekan rt/dl yang bermasalah
           sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
           sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
-          
-          # 3. Setup Konfigurasi
+
+          # 3. Setup: Hapus -D_GNU_SOURCE agar tidak double definition
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
@@ -57,38 +55,37 @@ jobs:
             -Dtests=false \
             -Dutils=false \
             -Duseroot=false \
-            -Dc_args="-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_FORTIFY_SOURCE=2 -Wno-implicit-function-declaration" \
+            -Dc_args="-D_FILE_OFFSET_BITS=64 -Wno-macro-redefined -Wno-implicit-function-declaration" \
             -Dc_link_args="-L$(pwd)/fake_libs"
 
-          # 4. KOMPILASI TARGET SPESIFIK (Hanya library utamanya saja)
-          # Ini mencegah Ninja mencoba membangun modul multithreading yang rusak di Android
-          ninja -C build-android lib/libfuse3.a
+          # 4. Build Target Spesifik
+          # Kita gunakan -k (keep going) agar jika ada modul MT yang gagal, .a tetap jadi
+          ninja -C build-android -k 0 lib/libfuse3.a || true
 
       - name: Prepare Artifact
         run: |
           mkdir -p fuse-dist/libs/arm64-v8a
           mkdir -p fuse-dist/include/fuse3
           
-          # Verifikasi dan salin hasil build
+          # Cek keberadaan file .a
           if [ -f build-android/lib/libfuse3.a ]; then
             cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
             echo "SUCCESS: libfuse3.a generated."
           else
-            echo "Searching for results in subdirectories..."
+            # Cari cadangan jika lokasi berbeda
             find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
           fi
 
-          # Cek final sebelum upload
           if [ ! -f fuse-dist/libs/arm64-v8a/libfuse3.a ]; then
-             echo "CRITICAL: Build failed to produce libfuse3.a"
-             exit 1
+            echo "FAILED: Library not found."
+            exit 1
           fi
           
-          # Ambil Header Files untuk JNI Bridge vMeer
+          # Ambil Header
           cp include/*.h fuse-dist/include/fuse3/
           find build-android -name "*.h" -exec cp {} fuse-dist/include/fuse3/ \; 2>/dev/null || true
 
-      - name: Upload vMeer Fuse Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libfuse3-vmeer-arm64
