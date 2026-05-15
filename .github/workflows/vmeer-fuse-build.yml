@@ -43,11 +43,24 @@ jobs:
 
       - name: Build Libfuse3
         run: |
-          # 1. Hapus paksa dependensi 'rt' dan 'dl' dari file meson karena sudah ada di libc Android
-          sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
-          sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
+          # 1. Buat Library 'rt' palsu agar Meson tidak komplain
+          # Di Android, fungsi rt sudah ada di libc, jadi kita buat file .a kosong
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
+          SYSROOT="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
           
-          # 2. Setup build
+          # Kita buat file kosong bernama librt.a di folder build agar bisa di-link
+          mkdir -p fake_libs
+          ar rcs fake_libs/librt.a
+          ar rcs fake_libs/libdl.a
+          
+          # 2. Patch Meson agar mencari library di folder fake_libs tersebut
+          export LDFLAGS="-L$(pwd)/fake_libs"
+          
+          # Patch manual file meson.build untuk memaksa required : false
+          sed -i "s/cc.find_library('rt', required : true)/cc.find_library('rt', required : false)/g" lib/meson.build
+          sed -i "s/cc.find_library('dl', required : true)/cc.find_library('dl', required : false)/g" lib/meson.build
+          
+          # 3. Setup build dengan tambahan c_link_args untuk library palsu kita
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
@@ -55,7 +68,8 @@ jobs:
             -Dexamples=false \
             -Dtests=false \
             -Dutils=false \
-            -Duseroot=false
+            -Dc_link_args="-L$(pwd)/fake_libs" \
+            -Dcpp_link_args="-L$(pwd)/fake_libs"
 
           # 3. Compile
           ninja -C build-android
