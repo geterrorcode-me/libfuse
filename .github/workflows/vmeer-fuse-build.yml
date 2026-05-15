@@ -14,8 +14,17 @@ jobs:
 
       - name: Switch to Stable Version
         run: |
-          # Menggunakan versi 3.16.2 yang terbukti stabil untuk NDK Android
-          git checkout fuse-3.16.2
+          # Memastikan semua tag terunduh dari server
+          git fetch --tags
+          
+          # Mencoba checkout ke versi 3.16.2
+          # Jika gagal, kita akan list tag yang tersedia untuk debugging
+          git checkout fuse-3.16.2 || git checkout libfuse-3.16.2 || {
+            echo "Tag tidak ditemukan. List tag yang tersedia:"
+            git tag -l "fuse-*"
+            git tag -l "libfuse-*"
+            exit 1
+          }
 
       - name: Setup Python & Meson
         run: |
