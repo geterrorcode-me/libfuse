@@ -12,20 +12,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Switch to Stable Version
-        run: |
-          # Memastikan semua tag terunduh dari server
-          git fetch --tags
-          
-          # Mencoba checkout ke versi 3.16.2
-          # Jika gagal, kita akan list tag yang tersedia untuk debugging
-          git checkout fuse-3.16.2 || git checkout libfuse-3.16.2 || {
-            echo "Tag tidak ditemukan. List tag yang tersedia:"
-            git tag -l "fuse-*"
-            git tag -l "libfuse-*"
-            exit 1
-          }
-
       - name: Setup Python & Meson
         run: |
           sudo apt-get update
@@ -34,7 +20,6 @@ jobs:
 
       - name: Create Cross File for Android
         run: |
-          # Mencari lokasi NDK terbaru secara dinamis
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           
@@ -44,7 +29,6 @@ jobs:
           cpp = '$TOOLCHAIN/aarch64-linux-android24-clang++'
           ar = '$TOOLCHAIN/llvm-ar'
           strip = '$TOOLCHAIN/llvm-strip'
-          pkgconfig = '/usr/bin/pkg-config'
 
           [host_machine]
           system = 'android'
@@ -55,17 +39,17 @@ jobs:
 
       - name: Build Libfuse3
         run: |
-          # 1. Buat Library 'rt' dan 'dl' palsu agar Meson tidak mogok
-          # Di Android (Bionic), fungsi ini sudah ada di libc.
+          # 1. Buat Fake Libs untuk membohongi Meson
           mkdir -p fake_libs
           ar rcs fake_libs/librt.a
           ar rcs fake_libs/libdl.a
           
-          # 2. Patch file meson agar tidak mewajibkan librt/libdl
+          # 2. Patch Meson agar tidak mencari library sistem yang tidak ada di Android
+          # Kami gunakan 'dependency' kosong agar pengecekan selalu 'found'
           sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
           sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
           
-          # 3. Setup Build dengan argumen khusus Android
+          # 3. Setup build
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
@@ -73,12 +57,10 @@ jobs:
             -Dexamples=false \
             -Dtests=false \
             -Dutils=false \
-            -Duseroot=false \
-            -Dc_args="-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -Wno-implicit-function-declaration" \
+            -Dc_args="-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64" \
             -Dc_link_args="-L$(pwd)/fake_libs"
 
-          # 4. Jalankan Kompilasi
-          # Kita gunakan -j$(nproc) agar cepat dan tetap lanjut meski ada error kecil di modul non-vital
+          # 4. Compile (Gunakan -k agar tidak berhenti jika modul pembantu error)
           ninja -C build-android || true
 
       - name: Prepare Artifact
@@ -86,20 +68,20 @@ jobs:
           mkdir -p fuse-dist/libs/arm64-v8a
           mkdir -p fuse-dist/include/fuse3
           
-          # Cari file .a yang berhasil dibuat
-          if [ -f build-android/lib/libfuse3.a ]; then
-            cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
-            echo "SUCCESS: libfuse3.a found."
-          else
-            echo "ERROR: libfuse3.a NOT FOUND."
+          # Cari file .a (libfuse3.a)
+          find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
+          
+          # Cek apakah file berhasil disalin
+          if [ ! -f fuse-dist/libs/arm64-v8a/libfuse3.a ]; then
+            echo "CRITICAL ERROR: libfuse3.a was not generated!"
             exit 1
           fi
           
-          # Salin header penting untuk engine vMeer
+          # Ambil header
           cp include/*.h fuse-dist/include/fuse3/
-          cp build-android/fuse_common.h fuse-dist/include/fuse3/ 2>/dev/null || true
+          find build-android -name "*.h" -exec cp {} fuse-dist/include/fuse3/ \; 2>/dev/null || true
 
-      - name: Upload vMeer Fuse Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libfuse3-vmeer-arm64
