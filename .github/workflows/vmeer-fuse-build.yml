@@ -39,7 +39,11 @@ jobs:
 
       - name: Build Libfuse3
         run: |
-          # Inisialisasi build folder dengan Meson
+          # 1. Patch: Lewati pengecekan librt karena di Android sudah menyatu di libc
+          sed -i "s/cc.find_library('rt', required : true)/cc.find_library('rt', required : false)/g" lib/meson.build
+          
+          # 2. Inisialisasi build folder
+          # Tambahkan -Dstubs=false agar tidak mencari library sistem yang tidak ada di NDK
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
