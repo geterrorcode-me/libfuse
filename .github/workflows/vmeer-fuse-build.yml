@@ -42,11 +42,11 @@ jobs:
           ar rcs fake_libs/librt.a
           ar rcs fake_libs/libdl.a
           
-          # 2. Patch Meson: Hapus paksa pengecekan rt/dl yang bermasalah
+          # 2. Patch Meson: Paksa matikan pencarian library sistem
           sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
           sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
 
-          # 3. Setup: Hapus -D_GNU_SOURCE agar tidak double definition
+          # 3. Setup: Matikan fitur kernel yang bermasalah di NDK API 24 secara paksa
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
@@ -55,29 +55,22 @@ jobs:
             -Dtests=false \
             -Dutils=false \
             -Duseroot=false \
-            -Dc_args="-D_FILE_OFFSET_BITS=64 -Wno-macro-redefined -Wno-implicit-function-declaration" \
+            -Dc_args="-D_FILE_OFFSET_BITS=64 -Wno-macro-redefined -Wno-implicit-function-declaration -U_GNU_SOURCE -UHAVE_COPY_FILE_RANGE -UHAVE_STATX" \
             -Dc_link_args="-L$(pwd)/fake_libs"
 
-          # 4. Build Target Spesifik
-          # Kita gunakan -k (keep going) agar jika ada modul MT yang gagal, .a tetap jadi
-          ninja -C build-android -k 0 lib/libfuse3.a || true
+          # 4. Build spesifik library inti
+          ninja -C build-android lib/libfuse3.a
 
       - name: Prepare Artifact
         run: |
           mkdir -p fuse-dist/libs/arm64-v8a
           mkdir -p fuse-dist/include/fuse3
           
-          # Cek keberadaan file .a
-          if [ -f build-android/lib/libfuse3.a ]; then
-            cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
-            echo "SUCCESS: libfuse3.a generated."
-          else
-            # Cari cadangan jika lokasi berbeda
-            find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
-          fi
-
+          # Salin file .a dari lokasi manapun ia berada
+          find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
+          
           if [ ! -f fuse-dist/libs/arm64-v8a/libfuse3.a ]; then
-            echo "FAILED: Library not found."
+            echo "FAILED: libfuse3.a still not found."
             exit 1
           fi
           
