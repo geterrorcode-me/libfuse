@@ -18,18 +18,22 @@ jobs:
 
       - name: Create Cross File for Android
         run: |
-          # Mencari NDK secara dinamis
           NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | tail -1)
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
           
-          # Membuat file konfigurasi cross-compile untuk Meson
           cat > android_cross.txt <<EOF
           [binaries]
           c = '$TOOLCHAIN/aarch64-linux-android24-clang'
           cpp = '$TOOLCHAIN/aarch64-linux-android24-clang++'
           ar = '$TOOLCHAIN/llvm-ar'
           strip = '$TOOLCHAIN/llvm-strip'
+          pkgconfig = '/usr/bin/pkg-config'
 
+          [properties]
+          # Memaksa Meson menganggap library ini sudah ada di dalam libc (Bionic)
+          # Ini akan mencegah error "library rt not found"
+          sys_root = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
+          
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
@@ -39,29 +43,29 @@ jobs:
 
       - name: Build Libfuse3
         run: |
-          # 1. Patch: Lewati pengecekan librt karena di Android sudah menyatu di libc
-          sed -i "s/cc.find_library('rt', required : true)/cc.find_library('rt', required : false)/g" lib/meson.build
+          # 1. Hapus paksa dependensi 'rt' dan 'dl' dari file meson karena sudah ada di libc Android
+          sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
+          sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
           
-          # 2. Inisialisasi build folder
-          # Tambahkan -Dstubs=false agar tidak mencari library sistem yang tidak ada di NDK
+          # 2. Setup build
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
             -Ddefault_library=static \
             -Dexamples=false \
             -Dtests=false \
-            -Dutils=false
+            -Dutils=false \
+            -Duseroot=false
 
-          # Compile
+          # 3. Compile
           ninja -C build-android
 
       - name: Prepare Artifact
         run: |
           mkdir -p fuse-dist/libs/arm64-v8a
           mkdir -p fuse-dist/include
-          # Ambil hasil build (biasanya ada di folder lib/)
-          cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
-          # Ambil header-header penting
+          # Cari file .a secara dinamis karena lokasi output meson bisa bervariasi
+          find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
           cp include/*.h fuse-dist/include/
 
       - name: Upload Artifact
@@ -69,4 +73,3 @@ jobs:
         with:
           name: libfuse3-vmeer-arm64
           path: fuse-dist/
-          
