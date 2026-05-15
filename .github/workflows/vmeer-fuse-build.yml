@@ -42,11 +42,15 @@ jobs:
           ar rcs fake_libs/librt.a
           ar rcs fake_libs/libdl.a
           
-          # 2. Patch Meson: Paksa matikan pencarian library sistem
+          # 2. Patch Meson: Matikan dependensi sistem
           sed -i "s/cc.find_library('rt', required : true)/dependency('', required : false)/g" lib/meson.build
           sed -i "s/cc.find_library('dl', required : true)/dependency('', required : false)/g" lib/meson.build
 
-          # 3. Setup: Matikan fitur kernel yang bermasalah di NDK API 24 secara paksa
+          # 3. FIX RADIKAL: Kosongkan fuse_loop_mt.c agar tidak merusak build Android
+          # Bionic tidak mendukung pthread_setcancelstate.
+          echo "/* Empty file for Android compatibility */" > lib/fuse_loop_mt.c
+
+          # 4. Setup: Gunakan argumen yang sudah kita optimasi
           meson setup build-android \
             --cross-file android_cross.txt \
             --buildtype release \
@@ -58,7 +62,7 @@ jobs:
             -Dc_args="-D_FILE_OFFSET_BITS=64 -Wno-macro-redefined -Wno-implicit-function-declaration -U_GNU_SOURCE -UHAVE_COPY_FILE_RANGE -UHAVE_STATX" \
             -Dc_link_args="-L$(pwd)/fake_libs"
 
-          # 4. Build spesifik library inti
+          # 5. Build spesifik library inti
           ninja -C build-android lib/libfuse3.a
 
       - name: Prepare Artifact
@@ -66,15 +70,18 @@ jobs:
           mkdir -p fuse-dist/libs/arm64-v8a
           mkdir -p fuse-dist/include/fuse3
           
-          # Salin file .a dari lokasi manapun ia berada
-          find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
+          if [ -f build-android/lib/libfuse3.a ]; then
+            cp build-android/lib/libfuse3.a fuse-dist/libs/arm64-v8a/
+            echo "SUCCESS: libfuse3.a generated."
+          else
+            find build-android -name "libfuse3.a" -exec cp {} fuse-dist/libs/arm64-v8a/ \;
+          fi
           
           if [ ! -f fuse-dist/libs/arm64-v8a/libfuse3.a ]; then
             echo "FAILED: libfuse3.a still not found."
             exit 1
           fi
           
-          # Ambil Header
           cp include/*.h fuse-dist/include/fuse3/
           find build-android -name "*.h" -exec cp {} fuse-dist/include/fuse3/ \; 2>/dev/null || true
 
